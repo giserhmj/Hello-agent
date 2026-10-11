@@ -1,0 +1,107 @@
+import requests
+AGENT_SYSTEM_PROMPT = """
+你是⼀个智能旅⾏助⼿。你的任务是分析⽤户的请求，并使⽤可⽤⼯具⼀步步地解决问题。
+# 可⽤⼯具:
+- `get_weather(city: str)`: 查询指定城市的实时天⽓。
+- `get_attraction(city: str, weather: str)`: 根据城市和天⽓搜索推荐的旅游景点。
+# 输出格式要求:
+你的每次回复必须严格遵循以下格式，包含⼀对Thought和Action：
+Thought: [你的思考过程和下⼀步计划]
+Action: [你要执⾏的具体⾏动]
+Action的格式必须是以下之⼀：
+1. 调⽤⼯具：function_name(arg_name="arg_value")
+2. 结束任务：Finish[最终答案]
+# 重要提示:
+- 每次只输出⼀对Thought-Action
+- Action必须在同⼀⾏，不要换⾏
+- 当收集到⾜够信息可以回答⽤户问题时，必须使⽤ Action: Finish[最终答案] 格式结束
+请开始吧！
+"""
+#================天⽓查询================
+def get_weather(city: str) -> str:
+  """
+  通过调⽤ wttr.in API 查询真实的天⽓信息。
+  """
+# API端点，我们请求JSON格式的数据
+  url = f"https://wttr.in/{city}?format=j1"
+  try:
+# 发起⽹络请求
+    response = requests.get(url)
+    # 检查响应状态码是否为200 (成功)
+    response.raise_for_status()
+    # 解析返回的JSON数据
+    data = response.json()
+    # 提取当前天⽓状况
+    current_condition = data['current_condition'][0]
+    weather_desc = current_condition['weatherDesc'][0]['value']
+    temp_c = current_condition['temp_C']
+  # 格式化成⾃然语⾔返回
+    return f"{city}当前天⽓:{weather_desc}，⽓温{temp_c}摄⽒度"
+  except requests.exceptions.RequestException as e:
+  # 处理⽹络错误
+    return f"错误:查询天⽓时遇到⽹络问题 - {e}"
+  except (KeyError, IndexError) as e:
+  # 处理数据解析错误
+    return f"错误:解析天⽓数据失败，可能是城市名称⽆效 - {e}"
+#================景点推荐================
+import os
+from tavily import TavilyClient
+def get_attraction(city: str, weather: str) -> str:
+  """
+  根据城市和天⽓，使⽤Tavily Search API搜索并返回优化后的景点推荐。
+  """
+  # 1. 从环境变量中读取API密钥
+  api_key = os.environ.get("TAVILY_API_KEY")
+  if not api_key:
+    return "错误:未配置TAVILY_API_KEY环境变量。"
+  # 2. 初始化Tavily客户端
+  tavily = TavilyClient(api_key=api_key)
+  # 3. 构造⼀个精确的查询
+  query = f"'{city}' 在'{weather}'天⽓下最值得去的旅游景点推荐及理由"
+  try:
+  # 4. 调⽤API，include_answer=True会返回⼀个综合性的回答
+    response = tavily.search(query=query, search_depth="basic",include_answer=True)
+  # 5. Tavily返回的结果已经⾮常⼲净，可以直接使⽤
+  # response['answer'] 是⼀个基于所有搜索结果的总结性回答
+    if response.get("answer"):
+      return response["answer"]
+  # 如果没有综合性回答，则格式化原始结果
+    formatted_results = []
+    for result in response.get("results", []):
+      formatted_results.append(f"- {result['title']}:{result['content']}")
+    if not formatted_results:
+      return "抱歉，没有找到相关的旅游景点推荐。"
+    return "根据搜索，为您找到以下信息:\n" + "\n".join(formatted_results)
+  except Exception as e:
+    return f"错误:执⾏Tavily搜索时出现问题 - {e}"
+
+
+available_tools = {
+"get_weather": get_weather,
+"get_attraction": get_attraction,
+}
+#================OpenAI兼容客户端================
+from openai import OpenAI
+class OpenAICompatibleClient:
+  """
+  ⼀个⽤于调⽤任何兼容OpenAI接⼝的LLM服务的客户端。
+  """
+  def __init__(self, model: str, api_key: str, base_url: str):
+    self.model = model
+    self.client = OpenAI(api_key=api_key, base_url=base_url)
+  def generate(self, prompt: str, system_prompt: str) -> str:
+    """调⽤LLM API来⽣成回应。"""
+    print("正在调⽤⼤语⾔模型...")
+    try:
+      messages = [
+      {'role': 'system', 'content': system_prompt},
+      {'role': 'user', 'content': prompt}
+      ]
+      response = self.client.chat.completions.create(model=self.model,messages=messages,stream=False)
+      answer = response.choices[0].message.content
+      print("⼤语⾔模型响应成功。")
+      return answer
+    except Exception as e:
+      print(f"调⽤LLM API时发⽣错误: {e}")
+      return "错误:调⽤语⾔模型服务时出错。"  
+
